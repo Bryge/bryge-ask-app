@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "app",
+  "name": "Ask Bryge",
+  "id": "bryge-ask-app",
+  "backend": false,
+  "info": {
+    "keywords": ["app", "bryge", "ai", "natural language"],
+    "description": "Adds \"Ask Bryge\" to every panel's menu, so anyone viewing a dashboard can ask a question about what they are looking at.",
+    "author": {
+      "name": "Bryge"
+    },
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "screenshots": [],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "extensions": {
+    "addedLinks": [
+      {
+        "targets": ["grafana/dashboard/panel/menu"],
+        "title": "Ask Bryge about this panel",
+        "description": "Ask a question about this panel in plain language"
+      }
+    ]
+  },
+  "includes": [
+    {
+      "type": "page",
+      "icon": "cog",
+      "name": "Configuration",
+      "path": "/plugins/%PLUGIN_ID%",
+      "role": "Admin",
+      "addToNav": true
+    }
+  ],
+  "dependencies": {
+    "grafanaDependency": ">=11.1.0",
+    "plugins": []
+  }
+}
