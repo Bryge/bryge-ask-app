@@ -3,10 +3,14 @@
   "type": "app",
   "name": "Ask Bryge",
   "id": "bryge-ask-app",
-  "backend": false,
   "info": {
-    "keywords": ["app", "bryge", "ai", "natural language"],
-    "description": "Adds \"Ask Bryge\" to every panel's menu, so anyone viewing a dashboard can ask a question about what they are looking at.",
+    "keywords": [
+      "app",
+      "bryge",
+      "ai",
+      "natural language"
+    ],
+    "description": "Ask questions about your dashboards in plain language. Adds \"Ask Bryge\" to every panel's menu, ships the chat panel, and sets a dashboard up in one pass.",
     "author": {
       "name": "Bryge"
     },
@@ -21,13 +25,23 @@
   "extensions": {
     "addedLinks": [
       {
-        "targets": ["grafana/dashboard/panel/menu"],
+        "targets": [
+          "grafana/dashboard/panel/menu"
+        ],
         "title": "Ask Bryge about this panel",
         "description": "Ask a question about this panel in plain language"
       }
     ]
   },
   "includes": [
+    {
+      "type": "datasource",
+      "name": "Bryge API"
+    },
+    {
+      "type": "panel",
+      "name": "Bryge Chat"
+    },
     {
       "type": "page",
       "icon": "cog",
@@ -40,5 +54,6 @@
   "dependencies": {
     "grafanaDependency": ">=11.1.0",
     "plugins": []
-  }
+  },
+  "backend": false
 }

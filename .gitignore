@@ -46,3 +46,6 @@ ci/
 .idea
 
 .eslintcache
+
+# Generated at build time from BRYGE_API_KEY — never commit a live key
+src/key.generated.ts

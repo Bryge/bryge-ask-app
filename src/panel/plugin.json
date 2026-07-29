@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "panel",
+  "name": "Bryge Chat",
+  "id": "bryge-ask-panel",
+  "info": {
+    "keywords": [
+      "bryge",
+      "chat",
+      "ai",
+      "natural language"
+    ],
+    "description": "Ask a question about your data from the dashboard and get the answer plus a chart, in the dashboard's own time range.",
+    "author": {
+      "name": "Bryge"
+    },
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "links": [],
+    "screenshots": [],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=11.1.0",
+    "plugins": []
+  }
+}

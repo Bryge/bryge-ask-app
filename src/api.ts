@@ -1,15 +1,15 @@
 /**
- * Talking to Bryge from the app.
+ * Talking to Bryge.
  *
- * Same trick as the panel: the app holds no credentials, it borrows the Bryge *data
- * source's*. Requests go through `/api/datasources/proxy/uid/<uid>/bryge/…` and Grafana
- * attaches the stored API key server-side.
- *
- * (This mirrors `bryge-chat-panel/src/api.ts`. The two are separate npm packages with
- * separate webpack roots, so the file is duplicated rather than imported.)
+ * Everything goes through the Bryge API data source's proxy route. The app-level proxy
+ * (`/api/plugin-proxy/<id>/…`) would have avoided needing a data source at all, but
+ * Grafana 13 does not register those routes for an app without a backend — every
+ * request comes back "plugin route match not found" — so the data source stays.
  */
 import { getBackendSrv } from '@grafana/runtime';
 import { lastValueFrom } from 'rxjs';
+
+import { loadSettings } from './settings';
 
 export interface BrygeField {
   name: string;
@@ -49,28 +49,91 @@ export interface AskWindow {
   max_data_points: number;
 }
 
-function url(uid: string, path: string) {
-  return `/api/datasources/proxy/uid/${uid}/bryge${path}`;
+export interface OnboardResult {
+  id: string;
+  name: string;
+  status: string;
+  created: boolean;
 }
 
-async function post<T>(uid: string, path: string, data: unknown): Promise<T> {
-  const res = await lastValueFrom(getBackendSrv().fetch<T>({ url: url(uid, path), method: 'POST', data }));
+export interface BrygeStatus {
+  status: string;
+  last_error?: string | null;
+  run?: { status: string; tables: number; links: number; foreign_keys: number; semantic_links: number } | null;
+}
+
+export interface BrygeHealth {
+  ok: boolean;
+  user: string;
+  datasource_count: number;
+  analyzed_count: number;
+}
+
+/**
+ * Every call is proxied by the Bryge API data source the app creates during setup.
+ * Grafana decrypts the stored key server-side and attaches it, so the browser never
+ * sees it. The UID is looked up from the app's settings rather than threaded through
+ * every call site, because the panel and the panel-menu modal both live outside the
+ * app's component tree.
+ */
+async function base(): Promise<string> {
+  const { datasourceUid } = await loadSettings();
+  if (!datasourceUid) {
+    throw new Error('Ask Bryge is not connected yet. Run setup under Administration -> Plugins -> Ask Bryge.');
+  }
+  return `/api/datasources/proxy/uid/${datasourceUid}/bryge`;
+}
+
+async function post<T>(path: string, data: unknown): Promise<T> {
+  const res = await lastValueFrom(getBackendSrv().fetch<T>({ url: `${await base()}${path}`, method: 'POST', data }));
   return res.data;
 }
 
-async function get<T>(uid: string, path: string): Promise<T> {
-  const res = await lastValueFrom(getBackendSrv().fetch<T>({ url: url(uid, path), method: 'GET' }));
+async function get<T>(path: string): Promise<T> {
+  const res = await lastValueFrom(getBackendSrv().fetch<T>({ url: `${await base()}${path}`, method: 'GET' }));
   return res.data;
 }
 
+export function health(): Promise<BrygeHealth> {
+  return get('/api/grafana/health');
+}
+
+export function listDatasources(): Promise<{ datasources: BrygeDatasourceInfo[] }> {
+  return get('/api/grafana/datasources');
+}
+
+/** Hand a database to Bryge. Idempotent by host/port/database, so re-running setup on a
+ *  dashboard joins the existing analysis rather than duplicating it. */
+export function onboard(body: Record<string, unknown>): Promise<OnboardResult> {
+  return post('/api/grafana/onboard', body);
+}
+
+export function datasourceStatus(datasourceId: string): Promise<BrygeStatus> {
+  return get(`/api/grafana/datasources/${datasourceId}/status`);
+}
+
+/**
+ * Forget a database on the Bryge side: the connection, its analysis run, every table
+ * node, every discovered relationship and its embeddings.
+ *
+ * Needed so that removing the plugin and adding it again starts clean instead of
+ * layering a second analysis on top of the first. Deleting the row cascades to the
+ * graph, so one call is enough.
+ */
+export async function forget(datasourceId: string): Promise<void> {
+  await lastValueFrom(
+    getBackendSrv().fetch({ url: `${await base()}/api/datasources/${datasourceId}`, method: 'DELETE' })
+  );
+}
+
+/** Ask a question. Costs a model call. */
 export function ask(
-  uid: string,
   datasourceId: string,
   question: string,
   window: AskWindow,
   maxRows = 5000
 ): Promise<BrygeAnswer> {
-  return post(uid, '/api/grafana/query', {
+  return post('/api/grafana/query', {
     datasource_id: datasourceId,
     question,
     max_rows: maxRows,
@@ -79,14 +142,14 @@ export function ask(
   });
 }
 
+/** Re-run an already-generated query for a new time window. No model call. */
 export function rerun(
-  uid: string,
   datasourceId: string,
   sql: string,
   window: AskWindow,
   maxRows = 5000
 ): Promise<BrygeFrame> {
-  return post(uid, '/api/grafana/run', {
+  return post('/api/grafana/run', {
     datasource_id: datasourceId,
     sql,
     max_rows: maxRows,
@@ -94,14 +157,13 @@ export function rerun(
   });
 }
 
-export function listDatasources(uid: string): Promise<{ datasources: BrygeDatasourceInfo[] }> {
-  return get(uid, '/api/grafana/datasources');
-}
-
 export function describeError(err: unknown): string {
   const e = err as { status?: number; data?: { detail?: string; message?: string }; message?: string };
   if (e?.status === 401) {
-    return 'Bryge rejected the API key. Check the Bryge data source settings.';
+    return 'Bryge rejected the API key. Check it on the Ask Bryge configuration page.';
+  }
+  if (e?.status === 502 || e?.status === 504) {
+    return 'Grafana could not reach the Bryge API. Check the URL, and that Bryge is running and reachable from this Grafana server.';
   }
   if (e?.status === 429) {
     return 'Too many questions in a row — Bryge is rate limiting. Try again in a minute.';

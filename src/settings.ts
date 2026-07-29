@@ -1,32 +1,109 @@
 /**
- * Where the app keeps its two settings: which Bryge data source to speak through, and
- * which connected database to answer from.
+ * The app's own settings: where Bryge is, and what has been installed where.
  *
- * Read straight off Grafana's plugin settings API rather than passed down through
- * React context, because the panel-menu extension opens its modal outside the app's own
- * component tree — there is no provider above it to read from.
+ * The URL and key live on the Bryge API data source, not here; this only records which
+ * data source that is, plus what has been set up on which dashboard.
+ *
+ * Read straight off Grafana's plugin settings API rather than passed down through React
+ * context, because both the panel-menu modal and the chat panel live outside the app's
+ * own component tree; there is no provider above them to read from.
  */
 import { getBackendSrv } from '@grafana/runtime';
 
 export const PLUGIN_ID = 'bryge-ask-app';
 
-export interface AskAppSettings {
-  datasourceUid?: string;
-  brygeDatasourceId?: string;
+/** What a dashboard was wired up to, recorded when it was set up. */
+export interface DashboardBinding {
+  brygeDatasourceId: string;
+  brygeDatasourceName?: string;
+  dashboardTitle?: string;
+  installedAt?: string;
 }
 
-let cached: AskAppSettings | undefined;
+export interface AskAppSettings {
+  /** UID of the Bryge API data source that carries the URL and the encrypted key. */
+  datasourceUid?: string;
+  /** Fallback database, used on dashboards that were never explicitly set up. */
+  brygeDatasourceId?: string;
+  /** dashboard UID -> what it was connected to. */
+  dashboards?: Record<string, DashboardBinding>;
+}
 
-export async function loadSettings(force = false): Promise<AskAppSettings> {
+export interface PluginState {
+  enabled: boolean;
+  jsonData: AskAppSettings;
+  /** Whether an API key is stored. The value itself is never returned. */
+  apiKeySet: boolean;
+}
+
+let cached: PluginState | undefined;
+
+export async function loadState(force = false): Promise<PluginState> {
   if (cached && !force) {
     return cached;
   }
-  const res = await getBackendSrv().get<{ jsonData?: AskAppSettings }>(`/api/plugins/${PLUGIN_ID}/settings`);
-  cached = res?.jsonData ?? {};
+  const res = await getBackendSrv().get<{
+    enabled?: boolean;
+    jsonData?: AskAppSettings;
+    secureJsonFields?: Record<string, boolean>;
+  }>(`/api/plugins/${PLUGIN_ID}/settings`);
+  cached = {
+    enabled: Boolean(res?.enabled),
+    jsonData: res?.jsonData ?? {},
+    apiKeySet: Boolean(res?.secureJsonFields?.apiKey),
+  };
   return cached;
 }
 
+export async function loadSettings(force = false): Promise<AskAppSettings> {
+  return (await loadState(force)).jsonData;
+}
+
+/**
+ * The cached settings, without waiting.
+ *
+ * Grafana decides whether to show a panel-menu link by calling `configure` synchronously
+ * while it builds the menu, so there is nowhere to await a fetch. `prime()` runs once at
+ * plugin load and fills this in; until it resolves, callers see `undefined` and should
+ * treat that as "don't show anything", which fails closed rather than flashing a menu
+ * item that then errors.
+ */
+export function peekSettings(): AskAppSettings | undefined {
+  return cached?.jsonData;
+}
+
+export function prime(): void {
+  loadState(true).catch(() => undefined);
+}
+
+/**
+ * Save settings. Pass `apiKey` only when the user typed a new one.
+ *
+ * NOTE: Grafana MERGES jsonData on this endpoint rather than replacing it, so a key
+ * cannot be removed by omitting it — set it to undefined explicitly if you need it gone.
+ */
 export async function saveSettings(jsonData: AskAppSettings): Promise<void> {
   await getBackendSrv().post(`/api/plugins/${PLUGIN_ID}/settings`, { enabled: true, pinned: true, jsonData });
-  cached = jsonData;
+  cached = undefined;
+}
+
+/**
+ * Which database answers questions asked from a given dashboard.
+ *
+ * Per-dashboard, because one Grafana can front several unrelated databases and a
+ * question about a panel should query the database that panel is drawn from — not
+ * whichever one happened to be set up first. Falls back to the default so the panel menu
+ * still works on a dashboard nobody has run setup for.
+ */
+export function bindingFor(settings: AskAppSettings, dashboardUid?: string): DashboardBinding | undefined {
+  const bound = dashboardUid ? settings.dashboards?.[dashboardUid] : undefined;
+  if (bound) {
+    return bound;
+  }
+  return settings.brygeDatasourceId ? { brygeDatasourceId: settings.brygeDatasourceId } : undefined;
+}
+
+/** The dashboard the browser is currently showing, from the URL. */
+export function currentDashboardUid(): string | undefined {
+  return /\/d\/([^/?#]+)/.exec(window.location.pathname)?.[1];
 }

@@ -9,7 +9,7 @@ import { Alert, Button, Input, Spinner, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 
 import { ask, BrygeFrame, describeError } from '../api';
-import { AskAppSettings, loadSettings } from '../settings';
+import { bindingFor, currentDashboardUid, DashboardBinding, loadSettings } from '../settings';
 import { ChartView } from './ChartView';
 
 interface Turn {
@@ -57,7 +57,9 @@ function suggestions(title: string): string[] {
 
 export function AskModal({ context, onDismiss }: Props) {
   const s = useStyles2(styles);
-  const [settings, setSettings] = useState<AskAppSettings>();
+  // Resolved per dashboard: one Grafana can front several unrelated databases, and a
+  // question about this panel has to hit the database this dashboard was set up against.
+  const [binding, setBinding] = useState<DashboardBinding | null>();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -69,20 +71,20 @@ export function AskModal({ context, onDismiss }: Props) {
 
   useEffect(() => {
     loadSettings()
-      .then(setSettings)
-      .catch(() => setSettings({}));
+      .then((s) => setBinding(bindingFor(s, currentDashboardUid()) ?? null))
+      .catch(() => setBinding(null));
   }, []);
 
   const send = async (question: string) => {
     const q = question.trim();
-    if (!q || busy || !settings?.datasourceUid || !settings?.brygeDatasourceId) {
+    if (!q || busy || !binding?.brygeDatasourceId) {
       return;
     }
     setInput('');
     setBusy(true);
     setTurns((t) => [...t, { question: q, pending: true }]);
     try {
-      const res = await ask(settings.datasourceUid, settings.brygeDatasourceId, q, {
+      const res = await ask(binding.brygeDatasourceId, q, {
         from: range.from.toISOString(),
         to: range.to.toISOString(),
         max_data_points: 1000,
@@ -104,11 +106,11 @@ export function AskModal({ context, onDismiss }: Props) {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' });
   }, [turns]);
 
-  if (settings && (!settings.datasourceUid || !settings.brygeDatasourceId)) {
+  if (binding === null) {
     return (
-      <Alert title="Ask Bryge is not configured" severity="info">
-        An admin needs to pick the Bryge data source and the database to answer from, under
-        Administration → Plugins → Ask Bryge.
+      <Alert title="This dashboard has not been set up yet" severity="info">
+        An admin can connect it under Administration → Plugins → Ask Bryge: pick this dashboard, and
+        Bryge reads the database its panels already query.
       </Alert>
     );
   }
@@ -124,7 +126,7 @@ export function AskModal({ context, onDismiss }: Props) {
         {!turns.length && (
           <div className={s.prompts}>
             {prompts.map((p) => (
-              <Button key={p} variant="secondary" size="sm" onClick={() => send(p)} disabled={!settings}>
+              <Button key={p} variant="secondary" size="sm" onClick={() => send(p)} disabled={!binding}>
                 {p}
               </Button>
             ))}
@@ -172,7 +174,7 @@ export function AskModal({ context, onDismiss }: Props) {
         <Input
           autoFocus
           value={input}
-          disabled={busy || !settings}
+          disabled={busy || !binding}
           placeholder={busy ? 'Waiting for Bryge…' : `Ask about ${title}…`}
           onChange={(e) => setInput(e.currentTarget.value)}
         />

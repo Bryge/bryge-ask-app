@@ -125,7 +125,7 @@ await card.scrollIntoViewIfNeeded().catch(() => {});
 await page.waitForTimeout(1000);
 
 const before2 = calls.length;
-const starter = page.getByRole('button', { name: /How much energy was consumed/ }).first();
+const starter = page.getByRole('button', { name: /What stands out in this data/ }).first();
 if (await starter.isVisible().catch(() => false)) {
   await starter.click();
   await page.waitForFunction(() => !document.body.innerText.includes('Bryge is reading your data…'), null, {

@@ -1,6 +1,6 @@
 {
   "name": "ask",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "scripts": {
     "build": "webpack -c ./.config/webpack/webpack.config.ts --env production",
     "dev": "webpack -w -c ./.config/webpack/webpack.config.ts --env development",
@@ -11,7 +11,9 @@
     "lint:fix": "npm run lint -- --fix && prettier --write --list-different .",
     "e2e": "playwright test",
     "server": "docker compose up --build",
-    "sign": "sign-plugin"
+    "sign": "sign-plugin",
+    "postbuild": "node scripts/copy-nested-assets.mjs",
+    "prebuild": "node scripts/write-key.mjs"
   },
   "author": "Bryge",
   "license": "Apache-2.0",
