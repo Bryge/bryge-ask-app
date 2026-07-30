@@ -62,7 +62,7 @@ await page.goto(`${BASE}${DASH}?from=now-6h&to=now`, { waitUntil: 'domcontentloa
 await page.waitForTimeout(15000);
 
 // ---------------------------------------------------------------- panel menu
-const PANEL = 'Phase voltages'; // an ordinary SQL panel, nothing to do with Bryge
+const PANEL = process.env.PANEL || 'Phase voltages'; // an ordinary panel, nothing to do with Bryge
 const header = page.getByTestId(`data-testid Panel header ${PANEL}`);
 check(await header.isVisible().catch(() => false), `found the "${PANEL}" panel`);
 await header.hover();
@@ -119,10 +119,14 @@ if (askVisible) {
 // ---------------------------------------------------------------- chat card
 await page.goto(`${BASE}${DASH}?from=now-6h&to=now`, { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(12000);
+// Grafana only renders panels once they are near the viewport, and the chat card is the
+// last panel on a long dashboard — so scroll to the bottom BEFORE looking for it.
+await page.mouse.wheel(0, 6000);
+await page.waitForTimeout(4000);
 const card = page.getByTestId('data-testid Panel header Ask Bryge');
 check(await card.isVisible().catch(() => false), 'Bryge Chat card is on the dashboard');
 await card.scrollIntoViewIfNeeded().catch(() => {});
-await page.waitForTimeout(1000);
+await page.waitForTimeout(1500);
 
 const before2 = calls.length;
 const starter = page.getByRole('button', { name: /What stands out in this data/ }).first();

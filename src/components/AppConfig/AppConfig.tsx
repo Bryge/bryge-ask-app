@@ -29,6 +29,7 @@ import {
   listDashboards,
   listGrafanaDatasources,
   saveDashboard,
+  secretPromptFor,
   sourcesUsedBy,
   upsertBrygeDatasource,
   withChatPanel,
@@ -415,9 +416,18 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
                   <Alert title={`Found ${source.ds.name}`} severity="info">
                     <Stack direction="column" gap={0}>
                       <span>
-                        {brygeKindOf(source.ds.type)} · {source.ds.url} ·{' '}
-                        {(source.ds.jsonData?.database as string) ?? source.ds.database} as{' '}
-                        <strong>{source.ds.user}</strong>
+                        {brygeKindOf(source.ds.type)} ·{' '}
+                        {(source.ds.jsonData?.host as string) ?? source.ds.url} ·{' '}
+                        {(source.ds.jsonData?.defaultBucket as string) ??
+                          (source.ds.jsonData?.defaultDatabase as string) ??
+                          (source.ds.jsonData?.database as string) ??
+                          source.ds.database}
+                        {/* ClickHouse keeps the user in jsonData, Postgres at the top level. */}
+                        {((source.ds.jsonData?.username as string) ?? source.ds.user) ? (
+                          <>
+                            {' '}as <strong>{(source.ds.jsonData?.username as string) ?? source.ds.user}</strong>
+                          </>
+                        ) : null}
                       </span>
                       <span>
                         {source.tables.length
@@ -468,14 +478,14 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
                     </>
                   )}
                   <Field
-                    label="Database password"
-                    description={`Grafana stores credentials encrypted and never returns them, so the password for "${source.ds.user}" has to be entered once here.`}
+                    label={secretPromptFor(brygeKindOf(source.ds.type)!).label}
+                    description={secretPromptFor(brygeKindOf(source.ds.type)!).hint}
                   >
                     <Input
                       type="password"
                       value={password}
                       width={50}
-                      placeholder="Database password"
+                      placeholder={secretPromptFor(brygeKindOf(source.ds.type)!).label}
                       onChange={(e) => setPassword(e.currentTarget.value)}
                     />
                   </Field>

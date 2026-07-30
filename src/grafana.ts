@@ -41,6 +41,17 @@ const KIND_BY_TYPE: Record<string, string> = {
 
 const DEFAULT_PORTS: Record<string, number> = { postgres: 5432, clickhouse: 8123, influxdb2: 8086 };
 
+/** Split "host:port" as Grafana stores a data source URL. */
+function splitHostPort(url: string | undefined, fallbackPort: number): { host: string; port: number } {
+  const raw = (url ?? '').replace(/^\w+:\/\//, '').trim();
+  const idx = raw.lastIndexOf(':');
+  if (idx === -1) {
+    return { host: raw, port: fallbackPort };
+  }
+  const port = Number(raw.slice(idx + 1));
+  return { host: raw.slice(0, idx), port: Number.isFinite(port) && port > 0 ? port : fallbackPort };
+}
+
 export function brygeKindOf(type: string): string | undefined {
   return KIND_BY_TYPE[type];
 }
@@ -161,12 +172,68 @@ export function sourcesUsedBy(dashboard: any): DashboardSource[] {
   return [...byUid.values()].sort((a, b) => b.panels - a.panels);
 }
 
-export function connectionFor(ds: GrafanaDatasource, password: string) {
+/** What the secret field should be called and explained for a given engine. */
+export function secretPromptFor(kind: string): { label: string; hint: string } {
+  if (kind === 'influxdb2' || kind === 'influxdb3') {
+    return {
+      label: 'InfluxDB API token',
+      hint: 'Grafana stores the token encrypted and never returns it, so it has to be entered once here.',
+    };
+  }
+  return {
+    label: 'Database password',
+    hint: 'Grafana stores credentials encrypted and never returns them, so the password has to be entered once here.',
+  };
+}
+
+/**
+ * Build the connection blob Bryge expects for this engine.
+ *
+ * Each engine wants a different shape, and only the SQL ones look like
+ * host/port/database/user/password. InfluxDB is authenticated by a token and addresses
+ * data by org + bucket, so reusing the Postgres shape produces a connection that fails
+ * with a confusing error rather than an obvious one.
+ *
+ * Everything except the secret is read off the Grafana data source; the secret is the
+ * one thing Grafana will not hand back.
+ */
+export function connectionFor(ds: GrafanaDatasource, secret: string) {
   const kind = brygeKindOf(ds.type)!;
-  const raw = (ds.url ?? '').replace(/^\w+:\/\//, '').trim();
-  const idx = raw.lastIndexOf(':');
-  const port = idx === -1 ? DEFAULT_PORTS[kind] ?? 5432 : Number(raw.slice(idx + 1)) || DEFAULT_PORTS[kind];
-  const host = idx === -1 ? raw : raw.slice(0, idx);
+  const json = ds.jsonData ?? {};
+
+  if (kind === 'influxdb2' || kind === 'influxdb3') {
+    const { host, port } = splitHostPort(ds.url, 8086);
+    return {
+      kind,
+      connection: {
+        host,
+        port,
+        token: secret,
+        org: (json.organization as string) ?? '',
+        bucket: (json.defaultBucket as string) ?? ds.database ?? '',
+      },
+    };
+  }
+
+  if (kind === 'clickhouse') {
+    // Grafana talks to ClickHouse over the native protocol (9000) by default; Bryge
+    // speaks its HTTP interface. Carrying 9000 across gives a connection that times out
+    // for no visible reason, so fall back to the HTTP port unless one is configured.
+    const configured = Number(json.port);
+    const nativePort = !configured || configured === 9000 || configured === 9440;
+    return {
+      kind,
+      connection: {
+        host: (json.host as string) ?? splitHostPort(ds.url, 8123).host,
+        port: nativePort ? 8123 : configured,
+        database: (json.defaultDatabase as string) ?? ds.database ?? 'default',
+        username: (json.username as string) ?? ds.user ?? 'default',
+        password: secret,
+      },
+    };
+  }
+
+  const { host, port } = splitHostPort(ds.url, DEFAULT_PORTS[kind] ?? 5432);
   return {
     kind,
     connection: {
@@ -174,10 +241,10 @@ export function connectionFor(ds: GrafanaDatasource, password: string) {
       port,
       // Grafana 13 keeps the database name in jsonData; older versions used the
       // top-level field. Read both so this works either way.
-      database: (ds.jsonData?.database as string) ?? ds.database ?? '',
+      database: (json.database as string) ?? ds.database ?? '',
       username: ds.user ?? '',
-      password,
-      sslmode: (ds.jsonData?.sslmode as string) ?? 'prefer',
+      password: secret,
+      sslmode: (json.sslmode as string) ?? 'prefer',
     },
   };
 }

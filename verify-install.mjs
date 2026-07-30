@@ -18,6 +18,13 @@ const BRYGE_URL = process.env.BRYGE_URL || 'http://192.168.1.31:8000';
 const BRYGE_API_KEY = process.env.BRYGE_API_KEY || '';
 const DB_PASSWORD = process.env.PLANT_DB_PASSWORD || '';
 const DASHBOARD = process.env.DASHBOARD_TITLE || 'Plant Energy & Weather';
+// What this dashboard should be detected as. Parameterised so the same script can prove
+// the flow on Postgres, ClickHouse and InfluxDB rather than only the one it was written for.
+const EXPECT_SOURCE = process.env.EXPECT_SOURCE || 'Plant Timescale';
+const EXPECT_USER = process.env.EXPECT_USER || 'tsdbadmin';
+const EXPECT_TABLE = process.env.EXPECT_TABLE || 'meter_readings';
+const DASH_UID = process.env.DASH_UID || 'bryge-plant-energy';
+const MENU_PANEL = process.env.PANEL || 'Phase voltages';
 const OUT = process.env.OUT || '.';
 
 const browser = await chromium.launch();
@@ -101,13 +108,16 @@ await page.waitForTimeout(6000);
 
 // 4. did it work out the database by itself?
 const body = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
-check(/Found Plant Timescale/.test(body), 'detected the dashboard\'s own database');
-check(/tsdbadmin/.test(body), 'read the username off the Grafana data source');
-check(/meter_readings/.test(body), 'scoped to the tables the dashboard queries');
+check(body.includes(`Found ${EXPECT_SOURCE}`), "detected the dashboard's own database", EXPECT_SOURCE);
+check(body.includes(EXPECT_USER), 'read the credentials off the Grafana data source', EXPECT_USER);
+check(body.includes(EXPECT_TABLE), 'scoped to the tables the dashboard queries', EXPECT_TABLE);
 await page.screenshot({ path: `${OUT}/install-3-detected.png` });
 
 // 5. install
-await page.getByPlaceholder('Database password').fill(DB_PASSWORD);
+// The secret field is labelled per engine — "Database password" for SQL engines,
+// "InfluxDB API token" for Influx — so fill whichever one this dashboard produced.
+const secretField = page.locator('input[type="password"]').first();
+await secretField.fill(DB_PASSWORD);
 await page.getByRole('button', { name: /Add Bryge to this dashboard/ }).click();
 await page
   .waitForSelector('text=/is ready/', { timeout: 600000 })
@@ -119,12 +129,12 @@ check(onboarded?.status === 200, 'onboard call succeeded', JSON.stringify(onboar
 await page.screenshot({ path: `${OUT}/install-4-done.png` });
 
 // 6. the dashboard itself
-await page.goto(`${BASE}/d/bryge-plant-energy?from=now-6h&to=now`, { waitUntil: 'domcontentloaded' });
+await page.goto(`${BASE}/d/${DASH_UID}?from=now-30m&to=now`, { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(15000);
 const card = page.getByTestId('data-testid Panel header Ask Bryge');
 check(await card.isVisible().catch(() => false), 'chat card was added to the dashboard');
 
-const PANEL = 'Phase voltages';
+const PANEL = MENU_PANEL;
 const header = page.getByTestId(`data-testid Panel header ${PANEL}`);
 await header.hover();
 await page.getByTestId(`data-testid Panel menu ${PANEL}`).click({ timeout: 15000 });
