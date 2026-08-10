@@ -2,8 +2,10 @@
   "name": "ask",
   "version": "1.2.1",
   "scripts": {
-    "build": "webpack -c ./.config/webpack/webpack.config.ts --env production",
-    "dev": "webpack -w -c ./.config/webpack/webpack.config.ts --env development",
+    "prepare:key": "node scripts/write-key.mjs",
+    "copy:assets": "node scripts/copy-nested-assets.mjs",
+    "build": "npm run prepare:key && webpack -c ./.config/webpack/webpack.config.ts --env production && npm run copy:assets",
+    "dev": "npm run prepare:key && webpack -w -c ./.config/webpack/webpack.config.ts --env development",
     "test": "jest --watch --onlyChanged",
     "test:ci": "jest --passWithNoTests --maxWorkers 4",
     "typecheck": "tsc --noEmit",
@@ -11,10 +13,9 @@
     "lint:fix": "npm run lint -- --fix && prettier --write --list-different .",
     "e2e": "playwright test",
     "server": "docker compose up --build",
-    "sign": "sign-plugin",
-    "postbuild": "node scripts/copy-nested-assets.mjs",
-    "prebuild": "node scripts/write-key.mjs"
+    "sign": "sign-plugin"
   },
+  "//scripts": "write-key and copy-nested-assets are chained INSIDE build, not wired as prebuild/postbuild. .npmrc sets ignore-scripts=true (supply-chain hardening from the Grafana scaffold), which disables npm lifecycle hooks — so both silently never ran: the nested data source and panel shipped with no logo, and the build depended on whatever stale src/key.generated.ts happened to be on disk. That file is gitignored, so a clean checkout could not build at all.",
   "author": "Bryge",
   "license": "Apache-2.0",
   "devDependencies": {
