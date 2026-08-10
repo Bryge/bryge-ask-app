@@ -3,7 +3,7 @@ import { PanelProps } from '@grafana/data';
 import { Alert, Button, Icon, Input, Spinner, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 
-import { ask, describeError, rerun } from '../../api';
+import { ask, BrygeFrame, describeError, rerun } from '../../api';
 import { BrygeChatOptions } from '../types';
 
 /** One exchange in the panel's conversation. */
@@ -15,7 +15,6 @@ interface Turn {
   error?: string;
   pending?: boolean;
 }
-import { BrygeFrame } from '../../api';
 import { ChartView } from '../../components/ChartView';
 
 type Props = PanelProps<BrygeChatOptions>;

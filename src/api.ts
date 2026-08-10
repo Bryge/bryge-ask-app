@@ -56,10 +56,22 @@ export interface OnboardResult {
   created: boolean;
 }
 
+export interface BrygeRun {
+  status: string;
+  tables: number;
+  links: number;
+  foreign_keys: number;
+  semantic_links: number;
+  /** queued | introspecting | summarizing | embedding | linking | done | error */
+  phase?: string | null;
+  phase_detail?: string | null;
+  started_at?: string | null;
+}
+
 export interface BrygeStatus {
   status: string;
   last_error?: string | null;
-  run?: { status: string; tables: number; links: number; foreign_keys: number; semantic_links: number } | null;
+  run?: BrygeRun | null;
 }
 
 export interface BrygeHealth {
@@ -110,6 +122,22 @@ export function onboard(body: Record<string, unknown>): Promise<OnboardResult> {
 
 export function datasourceStatus(datasourceId: string): Promise<BrygeStatus> {
   return get(`/api/grafana/datasources/${datasourceId}/status`);
+}
+
+/** Prove a connection works before anything is saved on either side. */
+export function testConnection(kind: string, connection: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
+  return post('/api/grafana/test', { kind, connection });
+}
+
+/**
+ * Every table the connection can actually read.
+ *
+ * Asked BEFORE onboarding so the table picker offers what exists rather than what the
+ * dashboard's SQL happens to mention. A panel charting one view names one table; the
+ * question the user wants to ask usually spans several more.
+ */
+export function listTables(kind: string, connection: Record<string, unknown>): Promise<{ tables: string[] }> {
+  return post('/api/grafana/tables', { kind, connection });
 }
 
 /**

@@ -172,6 +172,124 @@ export function sourcesUsedBy(dashboard: any): DashboardSource[] {
   return [...byUid.values()].sort((a, b) => b.panels - a.panels);
 }
 
+/**
+ * Grafana data source type -> the Bryge engine that reaches it THROUGH Grafana.
+ *
+ * These are the engines Bryge can query without ever being told a password: Grafana runs
+ * the SQL with the credentials it already stores, so nothing has to be typed twice.
+ * A type absent from this map still works, it just falls back to asking for the secret.
+ */
+const GRAFANA_KIND_BY_TYPE: Record<string, string> = {
+  postgres: 'grafana-postgres',
+  'grafana-postgresql-datasource': 'grafana-postgres',
+  'grafana-clickhouse-datasource': 'grafana-clickhouse',
+  'vertamedia-clickhouse-datasource': 'grafana-clickhouse',
+};
+
+export function grafanaKindOf(type: string): string | undefined {
+  return GRAFANA_KIND_BY_TYPE[type];
+}
+
+const SERVICE_ACCOUNT_NAME = 'bryge-ask';
+
+interface ServiceAccount {
+  id: number;
+  name: string;
+  login: string;
+}
+
+/**
+ * Get Bryge a Grafana service-account token, creating the account the first time.
+ *
+ * This is what removes the password prompt. Grafana encrypts stored data source
+ * credentials and will never hand them back, so the old setup page had no choice but to
+ * ask the user to type the database password a second time — for a database Grafana was
+ * already querying on the very dashboard they had just picked. A token lets Bryge ask
+ * Grafana to run the query instead, so the credential never moves.
+ *
+ * Viewer, deliberately: it is the least Grafana offers that can still query a data
+ * source. Note that Viewer is NOT read-only against the database — Grafana passes SQL
+ * straight through — so Bryge enforces read-only itself on the way out.
+ *
+ * Throws if the signed-in user may not manage service accounts. The caller falls back to
+ * asking for the password, which always works.
+ */
+export async function issueServiceAccountToken(): Promise<string> {
+  const srv = getBackendSrv();
+  let account: ServiceAccount | undefined;
+  try {
+    const found = await srv.get<{ serviceAccounts: ServiceAccount[] }>('/api/serviceaccounts/search', {
+      query: SERVICE_ACCOUNT_NAME,
+      perpage: 100,
+    });
+    account = found?.serviceAccounts?.find((a) => a.name === SERVICE_ACCOUNT_NAME);
+  } catch {
+    // Search can be denied where create is not; let the create attempt produce the error.
+  }
+  if (!account) {
+    account = await srv.post<ServiceAccount>('/api/serviceaccounts', {
+      name: SERVICE_ACCOUNT_NAME,
+      role: 'Viewer',
+      isDisabled: false,
+    });
+  }
+  // Token names must be unique within the account, and an existing token's value cannot
+  // be read back, so every setup run issues a new one rather than trying to reuse.
+  const created = await srv.post<{ key: string }>(`/api/serviceaccounts/${account.id}/tokens`, {
+    name: `bryge-ask-${Date.now()}`,
+  });
+  if (!created?.key) {
+    throw new Error('Grafana created the token but returned no value.');
+  }
+  return created.key;
+}
+
+/**
+ * The address Bryge should use to call this Grafana.
+ *
+ * The browser's own origin is the right guess and the wrong answer often enough to matter:
+ * `http://localhost:3000` is what an admin sees when Grafana runs on their machine, and
+ * Bryge's servers cannot reach that. It is offered as a prefill the user can correct, and
+ * the backend proves it by actually connecting before anything is saved.
+ */
+export function guessGrafanaUrl(): string {
+  return window.location.origin;
+}
+
+export function isLocalUrl(url: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:|\/|$)/i.test(url.trim());
+}
+
+/**
+ * The connection blob for reaching `ds` through this Grafana.
+ *
+ * host/port/database are carried alongside the Grafana fields for display only — they are
+ * what the workspace shows in a service list, and they are not used to connect.
+ */
+export function grafanaConnectionFor(ds: GrafanaDatasource, token: string, grafanaUrl: string) {
+  const kind = grafanaKindOf(ds.type)!;
+  const json = ds.jsonData ?? {};
+  const engine = brygeKindOf(ds.type)!;
+  const { host, port } = splitHostPort((json.host as string) ?? ds.url, DEFAULT_PORTS[engine] ?? 5432);
+  return {
+    kind,
+    connection: {
+      grafana_url: grafanaUrl.trim().replace(/\/+$/, ''),
+      grafana_token: token,
+      datasource_uid: ds.uid,
+      datasource_type: ds.type,
+      host: (json.host as string) ?? host,
+      port: Number(json.port) || port,
+      database:
+        (json.defaultDatabase as string) ??
+        (json.database as string) ??
+        ds.database ??
+        '',
+      username: (json.username as string) ?? ds.user ?? '',
+    },
+  };
+}
+
 /** What the secret field should be called and explained for a given engine. */
 export function secretPromptFor(kind: string): { label: string; hint: string } {
   if (kind === 'influxdb2' || kind === 'influxdb3') {
