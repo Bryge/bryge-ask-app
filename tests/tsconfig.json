@@ -1,0 +1,16 @@
+{
+  "//": "Playwright loads a tsconfig to transpile the specs, and resolves an `extends` itself rather than through tsc. The repo's root tsconfig extends `@grafana/tsconfig` by bare module name, which Playwright 1.62 cannot resolve, so the whole e2e run dies before a single test with 'Failed to resolve extends path @grafana/tsconfig'. This file is what playwright.config.ts points at: no extends, just enough to compile the specs. `npm run typecheck` still uses the real one.",
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true
+  },
+  "include": ["./**/*.ts"]
+}

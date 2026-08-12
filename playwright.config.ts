@@ -15,6 +15,10 @@ const pluginE2eAuth = `${dirname(require.resolve('@grafana/plugin-e2e'))}/auth`;
  */
 export default defineConfig<PluginOptions>({
   testDir: './tests',
+  // Point Playwright at a tsconfig it can actually load. It resolves `extends` with its
+  // own resolver, not tsc's, and the root tsconfig extends `@grafana/tsconfig` by bare
+  // module name — which Playwright cannot follow, so the run dies before the first test.
+  tsconfig: './tests/tsconfig.json',
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
