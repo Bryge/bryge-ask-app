@@ -1,19 +1,42 @@
-import { test, expect } from './fixtures';
+import { expect, test } from './fixtures';
 
-test('should be possible to save app configuration', async ({ appConfigPage, page }) => {
-  const saveButton = page.getByRole('button', { name: /Save API settings/i });
+/**
+ * What can honestly be tested without a Bryge backend: the first step of setup.
+ *
+ * Everything past step 1 needs a real Bryge to answer, so it belongs in
+ * `scripts/verify/`, which drives a live install end to end. These cover the part every
+ * installer meets first, and the part most likely to break silently, since the setup page
+ * decides what to show from a health check that fails on a fresh Grafana.
+ */
+test.describe('setup page', () => {
+  test('offers a trial and a bring-your-own-key path', async ({ appConfigPage, page }) => {
+    await expect(page.getByText('Connect your Bryge account')).toBeVisible();
+    await expect(page.getByText('Start a 24-hour trial')).toBeVisible();
+    await expect(page.getByText('I have a Bryge API key')).toBeVisible();
 
-  // reset the configured secret
-  await page.getByRole('button', { name: /reset/i }).click();
+    // The trial is the default, and it asks for one thing.
+    await expect(page.getByPlaceholder('you@company.com')).toBeVisible();
 
-  // enter some valid values
-  await page.getByRole('textbox', { name: 'API Key' }).fill('secret-api-key');
-  await page.getByRole('textbox', { name: 'API Url' }).clear();
-  await page.getByRole('textbox', { name: 'API Url' }).fill('http://www.my-awsome-grafana-app.com/api');
+    const start = page.getByRole('button', { name: 'Start the trial' });
+    await expect(start).toBeDisabled();
+    await page.getByPlaceholder('you@company.com').fill('someone@example.com');
+    await expect(start).toBeEnabled();
+  });
 
-  // listen for the server response on the saved form
-  const saveResponse = appConfigPage.waitForSettingsResponse();
+  test('the key path asks for a key and says where to get one', async ({ appConfigPage, page }) => {
+    await page.getByText('I have a Bryge API key').click();
 
-  await saveButton.click();
-  await expect(saveResponse).toBeOK();
+    await expect(page.getByPlaceholder('bk_…')).toBeVisible();
+    await expect(page.getByRole('link', { name: /Create an API key on bryge.io/i })).toBeVisible();
+
+    // Connect stays shut until a key is actually present.
+    await expect(page.getByRole('button', { name: 'Connect' })).toBeDisabled();
+    await page.getByPlaceholder('bk_…').fill('bk_not_a_real_key');
+    await expect(page.getByRole('button', { name: 'Connect' })).toBeEnabled();
+  });
+
+  test('a self-hosted Bryge can change the API URL', async ({ appConfigPage, page }) => {
+    await page.getByText('Self-hosted Bryge').click();
+    await expect(page.getByText('Bryge API URL')).toBeVisible();
+  });
 });
