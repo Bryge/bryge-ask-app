@@ -10,14 +10,29 @@
       "ai",
       "natural language"
     ],
-    "description": "Ask questions about your dashboards in plain language. Adds \"Ask Bryge\" to every panel's menu, ships the chat panel, and sets a dashboard up in one pass.",
+    "description": "Ask a dashboard's data questions in plain language. Bryge reads the database the dashboard already charts, works out how its tables relate, then writes the query and answers with the data behind it.",
     "author": {
-      "name": "Bryge"
+      "name": "Bryge",
+      "url": "https://bryge.io"
     },
     "logos": {
       "small": "img/logo.svg",
       "large": "img/logo.svg"
     },
+    "links": [
+      {
+        "name": "Website",
+        "url": "https://bryge.io"
+      },
+      {
+        "name": "Documentation",
+        "url": "https://github.com/Bryge/Bryge.io/tree/main/grafana-plugin"
+      },
+      {
+        "name": "Report an issue",
+        "url": "https://github.com/Bryge/Bryge.io/issues"
+      }
+    ],
     "screenshots": [],
     "version": "%VERSION%",
     "updated": "%TODAY%"
@@ -36,11 +51,13 @@
   "includes": [
     {
       "type": "datasource",
-      "name": "Bryge API"
+      "name": "Bryge API",
+      "path": "datasource/plugin.json"
     },
     {
       "type": "panel",
-      "name": "Bryge Chat"
+      "name": "Bryge Chat",
+      "path": "panel/plugin.json"
     },
     {
       "type": "page",
