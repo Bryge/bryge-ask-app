@@ -8,7 +8,7 @@ import {
 import { Alert, Button, Input, Spinner, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 
-import { ask, BrygeFrame, describeError } from '../api';
+import { ask, BrygeFrame, BrygeQuery, describeError } from '../api';
 import { bindingFor, currentDashboardUid, DashboardBinding, loadSettings } from '../settings';
 import { ChartView } from './ChartView';
 
@@ -16,6 +16,8 @@ interface Turn {
   question: string;
   answer?: string;
   sql?: string | null;
+  /** Every query the answer rests on, not just the one that is charted. */
+  queries?: BrygeQuery[];
   frame?: BrygeFrame | null;
   error?: string;
   pending?: boolean;
@@ -91,7 +93,9 @@ export function AskModal({ context, onDismiss }: Props) {
       });
       setTurns((t) =>
         t.map((turn, i) =>
-          i === t.length - 1 ? { question: q, answer: res.answer, sql: res.sql, frame: res.frame } : turn
+          i === t.length - 1
+            ? { question: q, answer: res.answer, sql: res.sql, queries: res.queries, frame: res.frame }
+            : turn
         )
       );
     } catch (e) {
@@ -154,10 +158,18 @@ export function AskModal({ context, onDismiss }: Props) {
             ) : null}
             {turn.sql && (
               <details className={s.sql}>
+                {/* A causal answer normally rests on several queries across several
+                    tables. Showing only the charted one made Bryge look like it had
+                    read one table when it had read four. */}
                 <summary>
-                  Query Bryge wrote{turn.frame ? ` · ${turn.frame.row_count} rows` : ''}
+                  {turn.queries && turn.queries.length > 1
+                    ? `${turn.queries.length} queries Bryge ran`
+                    : 'Query Bryge wrote'}
+                  {turn.frame ? ` · ${turn.frame.row_count} rows charted` : ''}
                 </summary>
-                <pre>{turn.sql}</pre>
+                {(turn.queries?.length ? turn.queries.map((q) => q.sql) : [turn.sql]).map((sql, n) => (
+                  <pre key={n}>{sql}</pre>
+                ))}
               </details>
             )}
           </div>

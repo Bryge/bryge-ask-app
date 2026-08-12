@@ -25,6 +25,15 @@ export interface AskAppSettings {
   datasourceUid?: string;
   /** Fallback database, used on dashboards that were never explicitly set up. */
   brygeDatasourceId?: string;
+  /**
+   * This Grafana's id, generated once and kept forever.
+   *
+   * It is what makes the trial one-per-install: Bryge keys the trial tenant on this,
+   * so re-running setup re-issues a key against the SAME 24-hour deadline instead of
+   * starting a fresh trial. Nothing about the machine is derived or fingerprinted —
+   * it is a random value this plugin made up about itself.
+   */
+  installId?: string;
   /** dashboard UID -> what it was connected to. */
   dashboards?: Record<string, DashboardBinding>;
 }
@@ -85,6 +94,27 @@ export function prime(): void {
 export async function saveSettings(jsonData: AskAppSettings): Promise<void> {
   await getBackendSrv().post(`/api/plugins/${PLUGIN_ID}/settings`, { enabled: true, pinned: true, jsonData });
   cached = undefined;
+}
+
+/**
+ * This Grafana's install id, creating it the first time it is asked for.
+ *
+ * Stored in the app's own settings rather than localStorage: the id has to be the same
+ * for every admin who opens the setup page, and a browser-local value would hand each
+ * of them their own trial.
+ */
+export async function ensureInstallId(): Promise<string> {
+  const s = await loadSettings(true);
+  if (s.installId) {
+    return s.installId;
+  }
+  const id =
+    globalThis.crypto?.randomUUID?.() ??
+    // Grafana runs over http on plenty of internal networks, where randomUUID is not
+    // exposed. Any unique string does the job; it is an id, not a secret.
+    `gf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  await saveSettings({ ...s, installId: id });
+  return id;
 }
 
 /**

@@ -30,6 +30,8 @@ export const BRYGE_WEB_URL = 'https://bryge.io';
 // `/keys`, not `/api-keys`: CloudFront sends `/api*` to the backend as a prefix match, so
 // an /api-keys link would 403 for every real user while working fine locally.
 export const BRYGE_API_KEYS_URL = `${BRYGE_WEB_URL}/keys`;
+// Where a trial that has run out is sent for a permanent account. `/signup` redirects
+// here: Bryge accounts are early-access gated, so this is the only door.
 export const BRYGE_EARLY_ACCESS_URL = `${BRYGE_WEB_URL}/early-access`;
 
 /** Prefilled into the key field on Bryge's own demo builds; empty everywhere else. */

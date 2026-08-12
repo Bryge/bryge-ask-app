@@ -111,7 +111,10 @@ export async function upsertBrygeDatasource(url: string, apiKey: string): Promis
 }
 
 const FROM_JOIN = /\b(?:from|join)\s+([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)?)/gi;
-const CTE_NAME = /\b(?:with|,)\s+([a-zA-Z_][\w$]*)\s+as\s*\(/gi;
+// `\b` belongs on `with` alone: a comma after a closing paren (`), b AS (`) has no word
+// boundary in front of it, so `\b(?:with|,)` misses every CTE after the first and then
+// reads its name as a table.
+const CTE_NAME = /(?:\bwith\b|,)\s+([a-zA-Z_][\w$]*)\s+as\s*\(/gi;
 
 function tablesInSql(sql: string): string[] {
   const ctes = new Set<string>();

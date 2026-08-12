@@ -20,8 +20,8 @@ import {
 } from '@grafana/ui';
 
 import {
-  datasourceStatus, describeError, forget, health, listDatasources, listTables, onboard,
-  testConnection,
+  datasourceStatus, describeError, forget, health, isExpiredKey, listDatasources, listTables,
+  onboard, startTrial, testConnection,
 } from '../../api';
 import {
   BRYGE_API_KEYS_URL, BRYGE_EARLY_ACCESS_URL, DEFAULT_BRYGE_URL, PREFILLED_API_KEY,
@@ -48,12 +48,40 @@ import {
   withChatPanel,
   withoutChatPanel,
 } from '../../grafana';
-import { AskAppSettings, loadState, saveSettings } from '../../settings';
+import { AskAppSettings, ensureInstallId, loadState, saveSettings } from '../../settings';
 import { Step, StepState } from './Step';
 
 export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<AskAppSettings>> {}
 
 type Route = 'grafana' | 'password';
+
+/** Trial or paste-your-own-key, in step 1. */
+type Access = 'trial' | 'key';
+
+/**
+ * Where a trial email waits out the page reload.
+ *
+ * Starting a trial needs the Bryge data source to exist first (the trial call goes
+ * through its proxy), and Grafana will not route to a data source created seconds ago
+ * until the page reloads. So the email is parked here, the data source is created, the
+ * page reloads, and setup picks the trial back up on its own. localStorage rather than
+ * the plugin's settings because it is one admin's half-finished action, not state this
+ * Grafana should carry.
+ */
+const PENDING_TRIAL = 'bryge.pendingTrialEmail';
+
+/** "21h 04m" from now until `iso`, or undefined once it has passed. */
+function timeLeft(iso?: string | null): string | undefined {
+  if (!iso) {
+    return undefined;
+  }
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return undefined;
+  }
+  const mins = Math.floor(ms / 60000);
+  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
+}
 
 /** What a completed setup produced, kept so the last step can report it. */
 interface Installed {
@@ -95,6 +123,16 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   const [apiKey, setApiKey] = useState(PREFILLED_API_KEY ?? '');
   const [connecting, setConnecting] = useState(false);
   const [showApiAdvanced, setShowApiAdvanced] = useState(false);
+  // The trial: how this Grafana gets a key without anyone having a Bryge account yet.
+  const [access, setAccess] = useState<Access>(PREFILLED_API_KEY ? 'key' : 'trial');
+  const [email, setEmail] = useState('');
+  const [starting, setStarting] = useState(false);
+  const [trial, setTrial] = useState(false);
+  const [keyExpiresAt, setKeyExpiresAt] = useState<string | null>();
+  const [expired, setExpired] = useState(false);
+  // Set when the user asks to swap the key on an already-working install, which is the
+  // only reason to reopen step 1 while Bryge is answering.
+  const [replacing, setReplacing] = useState(false);
 
   // ---- step 2: the dashboard
   const [dashboards, setDashboards] = useState<DashboardSummary[]>([]);
@@ -139,13 +177,53 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       const h = await health();
       setConnected(Boolean(h?.ok));
       setAccount(h?.user);
+      setTrial(Boolean(h?.trial));
+      setKeyExpiresAt(h?.key_expires_at ?? null);
+      setExpired(false);
       return Boolean(h?.ok);
     } catch (e) {
       setConnected(false);
       setAccount(undefined);
+      // An expired key is a different situation from a wrong one and gets a different
+      // page: nothing is misconfigured, the 24 hours are simply up.
+      if (isExpiredKey(e)) {
+        setExpired(true);
+        setTrial(true);
+        setAccess('key');
+      }
       return false;
     }
   }, []);
+
+  /**
+   * Ask Bryge for a trial key and put it on the data source.
+   *
+   * Split out from `beginTrial` because it also runs on its own after the reload that
+   * creating the data source needs — see PENDING_TRIAL.
+   */
+  const finishTrial = useCallback(async (addr: string, apiUrl: string) => {
+    setStarting(true);
+    setError(undefined);
+    try {
+      const grant = await startTrial({
+        email: addr,
+        install_id: await ensureInstallId(),
+        grafana_url: window.location.origin,
+      });
+      // Straight onto the data source, where Grafana encrypts it and attaches it
+      // server-side. The key is in this browser for the length of this function and is
+      // never written anywhere it could be read back.
+      await upsertBrygeDatasource(apiUrl.trim(), grant.key);
+      window.localStorage.removeItem(PENDING_TRIAL);
+      await probe();
+    } catch (e) {
+      setError(describeError(e));
+      // Dropped either way: a failed attempt must not silently re-fire on every reload.
+      window.localStorage.removeItem(PENDING_TRIAL);
+    } finally {
+      setStarting(false);
+    }
+  }, [probe]);
 
   useEffect(() => {
     (async () => {
@@ -153,9 +231,22 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
         const s = await loadState(true);
         const ds = (await listGrafanaDatasources()).find((d) => d.type === DATASOURCE_TYPE);
         setSettings(ds ? { ...s.jsonData, datasourceUid: ds.uid } : { ...s.jsonData, datasourceUid: undefined });
-        setUrl((ds?.jsonData?.url as string) ?? DEFAULT_BRYGE_URL);
+        const apiUrl = (ds?.jsonData?.url as string) ?? DEFAULT_BRYGE_URL;
+        setUrl(apiUrl);
+        const pending = window.localStorage.getItem(PENDING_TRIAL);
         if (ds) {
-          await probe();
+          const live = await probe();
+          // Half a trial: the data source was created, the page reloaded, and the key
+          // was never fetched. Finish it rather than making the user type the address
+          // again into a form that looks like it did nothing.
+          if (!live && pending) {
+            setEmail(pending);
+            await finishTrial(pending, apiUrl);
+          }
+        } else if (pending) {
+          // The data source went away between the two halves. Start over cleanly.
+          window.localStorage.removeItem(PENDING_TRIAL);
+          setEmail(pending);
         }
       } catch (e) {
         setError(describeError(e));
@@ -163,7 +254,10 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
         setBooting(false);
       }
     })();
-  }, [probe]);
+    // Runs once on mount: this is the boot sequence, and re-running it on a changed
+    // callback would re-enter the trial resume.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!connected) {
@@ -196,6 +290,39 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     } catch (e) {
       setError(describeError(e));
       setConnecting(false);
+    }
+  };
+
+  /**
+   * Start the 24-hour trial.
+   *
+   * Two shapes, because of what Grafana requires. If the Bryge data source already
+   * exists, the trial call can go straight through its proxy and the key lands without
+   * anything else happening. If it does not, the data source has to be created first
+   * (empty key, which is fine: the trial route is the one Bryge route that needs no
+   * credential) and the page reloaded before its proxy route resolves — so the email is
+   * parked and the boot sequence above finishes the job.
+   */
+  const beginTrial = async () => {
+    const addr = email.trim();
+    if (!addr) {
+      return;
+    }
+    setError(undefined);
+    if (settings.datasourceUid) {
+      await finishTrial(addr, url);
+      return;
+    }
+    setStarting(true);
+    try {
+      window.localStorage.setItem(PENDING_TRIAL, addr);
+      const uid = await upsertBrygeDatasource(url.trim(), '');
+      await saveSettings({ ...settings, datasourceUid: uid });
+      window.location.reload();
+    } catch (e) {
+      window.localStorage.removeItem(PENDING_TRIAL);
+      setError(describeError(e));
+      setStarting(false);
     }
   };
 
@@ -468,12 +595,17 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
 
   // Which step is open. Derived rather than stored, so a "Change" button only has to
   // clear the answer it owns and the sequence re-opens at the right place.
-  const current = !connected ? 1 : !chosen || !source ? 2 : !reachable ? 3 : !described ? 4 : !scopeChosen ? 5 : 6;
+  const current =
+    replacing || !connected ? 1 : !chosen || !source ? 2 : !reachable ? 3 : !described ? 4 : !scopeChosen ? 5 : 6;
   const stateOf = (n: number): StepState => (current === n ? 'active' : current > n ? 'done' : 'todo');
 
   const canUseGrafanaRoute = Boolean(source && grafanaKindOf(source.ds.type));
   const secret = source ? secretPromptFor(brygeKindOf(source.ds.type)!) : undefined;
   const mmss = `${Math.floor(elapsed / 60)}m ${String(elapsed % 60).padStart(2, '0')}s`;
+  const left = timeLeft(keyExpiresAt);
+  // Under six hours is when telling somebody matters: enough time to get an account
+  // before the dashboard stops answering, not so early that it is noise.
+  const endingSoon = trial && connected && (!left || Number(left.split('h')[0]) < 6);
 
   if (booting) {
     return (
@@ -486,48 +618,138 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
 
   return (
     <Stack direction="column" gap={2}>
+      {endingSoon && (
+        <Alert title="This Grafana's Bryge trial is nearly over" severity="warning">
+          <Stack direction="column" gap={1}>
+            <span>
+              {left ? `About ${left} left on the trial key.` : 'The trial key expires shortly.'} Get a
+              Bryge account, create an API key on it, and paste it into step 1. Nothing else has to
+              be redone: the dashboards, the analyzed database and the chat panel all stay as they
+              are.
+            </span>
+            <Stack direction="row" gap={1}>
+              <LinkButton
+                variant="secondary"
+                size="sm"
+                icon="external-link-alt"
+                href={BRYGE_EARLY_ACCESS_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Get a Bryge account
+              </LinkButton>
+              <Button size="sm" onClick={() => { setReplacing(true); setAccess('key'); }}>
+                Paste a new key
+              </Button>
+            </Stack>
+          </Stack>
+        </Alert>
+      )}
+
       <Step
         n={1}
         title="Connect your Bryge account"
         state={stateOf(1)}
-        summary={account ? `Connected as ${account}.` : 'Connected.'}
+        summary={
+          <Stack direction="row" gap={1} alignItems="center">
+            <span>
+              {account ? `Connected as ${account}.` : 'Connected.'}
+              {trial && left ? ` Trial ends in ${left}.` : ''}
+            </span>
+            <Button size="sm" fill="text" onClick={() => { setReplacing(true); setAccess('key'); }}>
+              Replace the key
+            </Button>
+          </Stack>
+        }
       >
         <Stack direction="column" gap={2}>
-          <Text variant="bodySmall" color="secondary">
-            Bryge needs an API key so it knows whose databases and analyses this Grafana is
-            using. Create one in your Bryge account, then paste it below. The key is stored
-            encrypted by Grafana and attached server-side, so it never reaches a browser.
-          </Text>
-          <Stack direction="row" gap={1}>
-            <LinkButton
-              variant="secondary"
-              icon="external-link-alt"
-              href={BRYGE_API_KEYS_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Create an API key on bryge.io
-            </LinkButton>
-            <LinkButton
-              variant="secondary"
-              fill="text"
-              href={BRYGE_EARLY_ACCESS_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              No account yet? Request access
-            </LinkButton>
-          </Stack>
-          <Field label="API key">
-            <SecretInput
-              isConfigured={false}
-              value={apiKey}
-              placeholder="bk_…"
-              width={52}
-              onReset={() => setApiKey('')}
-              onChange={(e) => setApiKey(e.currentTarget.value)}
+          {expired && (
+            <Alert title="This Grafana's Bryge trial has ended" severity="warning">
+              The 24 hours are up and the trial key has stopped working. Everything you set up
+              is still here. Get a Bryge account, create an API key on it, and paste it below to
+              carry on with the same dashboards.
+            </Alert>
+          )}
+
+          {!expired && !replacing && (
+            <RadioButtonGroup<Access>
+              value={access}
+              onChange={setAccess}
+              options={[
+                { value: 'trial', label: 'Start a 24-hour trial' },
+                { value: 'key', label: 'I have a Bryge API key' },
+              ]}
             />
-          </Field>
+          )}
+
+          {access === 'trial' && !expired && !replacing ? (
+            <>
+              <Text variant="bodySmall" color="secondary">
+                No account needed to try this. Bryge issues this Grafana a key that works for 24
+                hours, and the rest of setup runs exactly as it will afterwards. The key is stored
+                encrypted by Grafana and attached server-side, so it never reaches a browser. When
+                the 24 hours are up, replace it with a key from your own Bryge account and
+                everything you set up keeps working.
+              </Text>
+              <Field
+                label="Your work email"
+                description="So the Bryge team knows who is trying it and can get you an account."
+              >
+                <Input
+                  type="email"
+                  value={email}
+                  width={52}
+                  placeholder="you@company.com"
+                  onChange={(e) => setEmail(e.currentTarget.value)}
+                />
+              </Field>
+              <Stack direction="row" gap={1} alignItems="center">
+                <Button onClick={beginTrial} disabled={!email.trim() || !url.trim() || starting}>
+                  {starting ? 'Starting your trial…' : 'Start the trial'}
+                </Button>
+                {starting && <Spinner />}
+              </Stack>
+            </>
+          ) : (
+            <>
+              <Text variant="bodySmall" color="secondary">
+                Bryge needs an API key so it knows whose databases and analyses this Grafana is
+                using. Create one in your Bryge account, then paste it below. The key is stored
+                encrypted by Grafana and attached server-side, so it never reaches a browser.
+              </Text>
+              <Stack direction="row" gap={1}>
+                <LinkButton
+                  variant="secondary"
+                  icon="external-link-alt"
+                  href={BRYGE_API_KEYS_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Create an API key on bryge.io
+                </LinkButton>
+                <LinkButton
+                  variant="secondary"
+                  fill="text"
+                  href={BRYGE_EARLY_ACCESS_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  No account yet? Request access
+                </LinkButton>
+              </Stack>
+              <Field label="API key">
+                <SecretInput
+                  isConfigured={false}
+                  value={apiKey}
+                  placeholder="bk_…"
+                  width={52}
+                  onReset={() => setApiKey('')}
+                  onChange={(e) => setApiKey(e.currentTarget.value)}
+                />
+              </Field>
+            </>
+          )}
+
           <Collapse
             label="Self-hosted Bryge"
             isOpen={showApiAdvanced}
@@ -538,12 +760,20 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
               <Input value={url} width={52} onChange={(e) => setUrl(e.currentTarget.value)} />
             </Field>
           </Collapse>
-          <Stack direction="row" gap={1} alignItems="center">
-            <Button onClick={connect} disabled={!apiKey.trim() || !url.trim() || connecting}>
-              {connecting ? 'Checking the key…' : 'Connect'}
-            </Button>
-            {connecting && <Spinner />}
-          </Stack>
+
+          {(access === 'key' || expired || replacing) && (
+            <Stack direction="row" gap={1} alignItems="center">
+              <Button onClick={connect} disabled={!apiKey.trim() || !url.trim() || connecting}>
+                {connecting ? 'Checking the key…' : 'Connect'}
+              </Button>
+              {connecting && <Spinner />}
+              {replacing && (
+                <Button variant="secondary" fill="text" onClick={() => setReplacing(false)}>
+                  Cancel
+                </Button>
+              )}
+            </Stack>
+          )}
         </Stack>
       </Step>
 

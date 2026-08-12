@@ -3,7 +3,7 @@ import { PanelProps } from '@grafana/data';
 import { Alert, Button, Icon, Input, Spinner, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 
-import { ask, BrygeFrame, describeError, rerun } from '../../api';
+import { ask, BrygeFrame, BrygeQuery, describeError, rerun } from '../../api';
 import { BrygeChatOptions } from '../types';
 
 /** One exchange in the panel's conversation. */
@@ -11,6 +11,8 @@ interface Turn {
   question: string;
   answer?: string;
   sql?: string | null;
+  /** Every query the answer rests on. `sql` is the one charted and re-run. */
+  queries?: BrygeQuery[];
   frame?: BrygeFrame | null;
   error?: string;
   pending?: boolean;
@@ -50,7 +52,13 @@ export function BrygeChatPanel({ options, width, height, timeRange }: Props) {
       setTurns((t) =>
         t.map((turn, i) =>
           i === t.length - 1
-            ? { question: q, answer: res.answer, sql: res.sql, frame: res.frame ?? undefined }
+            ? {
+                question: q,
+                answer: res.answer,
+                sql: res.sql,
+                queries: res.queries,
+                frame: res.frame ?? undefined,
+              }
             : turn
         )
       );
@@ -152,8 +160,17 @@ export function BrygeChatPanel({ options, width, height, timeRange }: Props) {
 
             {turn.sql && (
               <details className={s.sql}>
-                <summary>Query Bryge wrote{turn.frame ? ` · ${turn.frame.row_count} rows` : ''}</summary>
-                <pre>{turn.sql}</pre>
+                {/* Show every query, not only the charted one: an answer that crossed
+                    four tables looked like it had read one. */}
+                <summary>
+                  {turn.queries && turn.queries.length > 1
+                    ? `${turn.queries.length} queries Bryge ran`
+                    : 'Query Bryge wrote'}
+                  {turn.frame ? ` · ${turn.frame.row_count} rows charted` : ''}
+                </summary>
+                {(turn.queries?.length ? turn.queries.map((q) => q.sql) : [turn.sql]).map((sql, n) => (
+                  <pre key={n}>{sql}</pre>
+                ))}
               </details>
             )}
           </div>

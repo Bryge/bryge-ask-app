@@ -26,9 +26,22 @@ export interface BrygeFrame {
   error?: string;
 }
 
+/** One query the agent actually ran on the way to the answer. */
+export interface BrygeQuery {
+  sql: string;
+  row_count?: number | null;
+  /** How many distinct tables it reads. */
+  tables?: number;
+}
+
 export interface BrygeAnswer {
   answer: string;
   sql: string | null;
+  /**
+   * Every query behind the answer, in the order they ran. `sql` above is the one the
+   * panel charts (the widest of these); a causal question normally runs several.
+   */
+  queries?: BrygeQuery[];
   frame: BrygeFrame | null;
   templated: boolean;
   window: { from: string; to: string; bucket: string };
@@ -77,8 +90,23 @@ export interface BrygeStatus {
 export interface BrygeHealth {
   ok: boolean;
   user: string;
+  role?: string;
+  /** ISO-8601, or null for a key that never expires. */
+  key_expires_at?: string | null;
+  /** True while this Grafana is running on a time-boxed trial key. */
+  trial?: boolean;
   datasource_count: number;
   analyzed_count: number;
+}
+
+/** What `POST /api/grafana/trial` hands back. The key is shown once and never again. */
+export interface TrialGrant {
+  key: string;
+  expires_at: string;
+  hours: number;
+  account: string;
+  trial: boolean;
+  max_datasources: number;
 }
 
 /**
@@ -108,6 +136,31 @@ async function get<T>(path: string): Promise<T> {
 
 export function health(): Promise<BrygeHealth> {
   return get('/api/grafana/health');
+}
+
+/**
+ * Start the 24-hour trial for this Grafana.
+ *
+ * The one Bryge route that needs no credential, which is the point: whoever just
+ * installed the plugin does not have one yet. It still goes through the data source
+ * proxy, so the URL stays in one place and no request is made from the browser to a
+ * host the Grafana server might not be allowed to reach.
+ *
+ * `install_id` is this Grafana's own id from the app's settings, so calling twice
+ * re-issues a key against the same deadline instead of starting a second trial.
+ */
+export function startTrial(body: {
+  email: string;
+  install_id: string;
+  grafana_url?: string;
+}): Promise<TrialGrant> {
+  return post('/api/grafana/trial', body);
+}
+
+/** True when Bryge refused because the key's time ran out, rather than it being wrong. */
+export function isExpiredKey(err: unknown): boolean {
+  const e = err as { status?: number; data?: { detail?: string } };
+  return e?.status === 401 && /expired/i.test(e?.data?.detail ?? '');
 }
 
 export function listDatasources(): Promise<{ datasources: BrygeDatasourceInfo[] }> {
@@ -187,6 +240,12 @@ export function rerun(
 
 export function describeError(err: unknown): string {
   const e = err as { status?: number; data?: { detail?: string; message?: string }; message?: string };
+  if (isExpiredKey(err)) {
+    return (
+      'This Bryge key has expired. If this Grafana was on a trial, the trial has ended — ' +
+      'create an API key on bryge.io and paste it in under Administration → Plugins → Ask Bryge.'
+    );
+  }
   if (e?.status === 401) {
     return 'Bryge rejected the API key. Check it on the Ask Bryge configuration page.';
   }
