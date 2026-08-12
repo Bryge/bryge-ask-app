@@ -24,19 +24,22 @@ test.describe('setup page', () => {
   });
 
   test('the key path asks for a key and says where to get one', async ({ appConfigPage, page }) => {
-    await page.getByText('I have a Bryge API key').click();
+    // .check() on the input, not a click on the label: Grafana's sticky page header
+    // overlaps the label and swallows the pointer event.
+    await page.getByLabel('I have a Bryge API key').check();
 
     await expect(page.getByPlaceholder('bk_…')).toBeVisible();
     await expect(page.getByRole('link', { name: /Create an API key on bryge.io/i })).toBeVisible();
 
+    // exact: true, or this also matches Grafana's own "Expand section: Connections" nav button.
     // Connect stays shut until a key is actually present.
-    await expect(page.getByRole('button', { name: 'Connect' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeDisabled();
     await page.getByPlaceholder('bk_…').fill('bk_not_a_real_key');
-    await expect(page.getByRole('button', { name: 'Connect' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
   });
 
   test('a self-hosted Bryge can change the API URL', async ({ appConfigPage, page }) => {
-    await page.getByText('Self-hosted Bryge').click();
+    await page.getByText('Self-hosted Bryge').click({ force: true });
     await expect(page.getByText('Bryge API URL')).toBeVisible();
   });
 });

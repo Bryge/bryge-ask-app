@@ -11,11 +11,11 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint --cache .",
     "lint:fix": "npm run lint -- --fix && prettier --write --list-different .",
-    "e2e": "playwright test",
+    "e2e": "playwright test --config tests/playwright.config.js",
     "server": "docker compose up --build",
     "sign": "sign-plugin"
   },
-  "//scripts": "write-key and copy-nested-assets are chained INSIDE build, not wired as prebuild/postbuild. .npmrc sets ignore-scripts=true (supply-chain hardening from the Grafana scaffold), which disables npm lifecycle hooks — so both silently never ran: the nested data source and panel shipped with no logo, and the build depended on whatever stale src/key.generated.ts happened to be on disk. That file is gitignored, so a clean checkout could not build at all.",
+  "//scripts": "write-key and copy-nested-assets are chained INSIDE build, not wired as prebuild/postbuild. .npmrc sets ignore-scripts=true (supply-chain hardening from the Grafana scaffold), which disables npm lifecycle hooks \u2014 so both silently never ran: the nested data source and panel shipped with no logo, and the build depended on whatever stale src/key.generated.ts happened to be on disk. That file is gitignored, so a clean checkout could not build at all.",
   "author": "Bryge",
   "license": "Apache-2.0",
   "devDependencies": {
