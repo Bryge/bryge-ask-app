@@ -1,29 +1,206 @@
-# This GitHub Action automates the process of building Grafana plugins.
-# (For more information, see https://github.com/grafana/plugin-actions/blob/main/build-plugin/README.md)
-name: Release
+name: Release Grafana plugin
+
+# Packages the plugin into the archive Grafana expects and attaches it to a GitHub
+# Release.
+#
+# Tag namespace stays `plugin-v*` rather than `v*`. Every release the plugin has ever had
+# is tagged that way, and renaming the namespace now would make the history read as two
+# separate projects.
+#
+# The tag must match `package.json`'s version. A zip called 1.3.0 whose plugin.json says
+# 1.2.1 installs fine and then reports the wrong version forever, which is the kind of
+# thing nobody notices until they are debugging something else.
 
 on:
   push:
     tags:
-      - 'v*' # Run workflow on version tags, e.g. v1.0.0.
+      - 'plugin-v*'
+  workflow_dispatch:
+    inputs:
+      root_urls:
+        description: >-
+          Comma-separated Grafana root URLs for a PRIVATE signature
+          (e.g. https://grafana.acme.com). Empty falls back to the GRAFANA_ROOT_URLS
+          repository variable; empty there too means an unsigned build.
+        required: false
+        default: ''
 
-permissions: read-all
+permissions:
+  contents: write        # create the release and upload assets
+
+concurrency:
+  group: release-plugin-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  release:
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
+  package:
+    name: Build, package and release
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      PLUGIN_ID: bryge-ask-app
+      # Hoisted to job level on purpose: the `secrets` context is NOT available in a
+      # step-level `if`, but `env` is. Testing the secret directly in a condition silently
+      # evaluates to empty and the step never runs.
+      POLICY_TOKEN: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
+      # A tag push carries no inputs, so without the repository-variable fallback a
+      # release build could never be signed — only a manual dispatch could.
+      ROOT_URLS: ${{ inputs.root_urls || vars.GRAFANA_ROOT_URLS }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
+      - uses: actions/checkout@v4
 
-      - uses: grafana/plugin-actions/build-plugin@build-plugin/v1.0.2
-        # Uncomment to enable plugin signing
-        # (For more info on how to generate the access policy token see https://grafana.com/developers/plugin-tools/publish-a-plugin/sign-a-plugin#generate-an-access-policy-token)
-        #with:
-        # Make sure to save the token in your repository secrets
-        #policy_token: $
-        # Usage of GRAFANA_API_KEY is deprecated, prefer `policy_token` option above
-        #grafana_token: $
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # src/key.generated.ts is generated, gitignored, and imported by src/defaults.ts, so
+      # a clean checkout cannot typecheck until it exists. `build` generates it too, but
+      # the quality gate runs first and would fail with "Cannot find module
+      # './key.generated'" — which it did, on the first tagged run.
+      - name: Generate build-time constants
+        run: npm run prepare:key
+
+      # A release that does not typecheck is worse than no release: it installs, and then
+      # fails in someone else's Grafana instead of here.
+      - name: Typecheck, lint and test
+        run: |
+          npm run typecheck
+          npm run lint
+          npm run test:ci
+
+      - name: Resolve and verify the version
+        id: version
+        run: |
+          set -euo pipefail
+          PKG=$(node -p "require('./package.json').version")
+          echo "version=$PKG" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME#plugin-v}"
+            if [ "$TAG" != "$PKG" ]; then
+              echo "::error::tag plugin-v$TAG does not match package.json version $PKG. Bump package.json (and its lockfile) before tagging."
+              exit 1
+            fi
+          fi
+          echo "building $PKG"
+
+      # No BRYGE_API_KEY here, deliberately. `prebuild` writes an empty constant, so the
+      # published plugin carries no credential and setup asks each installer for their own
+      # key — which is the flow the setup page is built around.
+      - name: Build
+        run: npm run build
+
+      - name: Check the build looks like a plugin
+        run: |
+          set -euo pipefail
+          test -f dist/module.js              || { echo "::error::dist/module.js missing"; exit 1; }
+          test -f dist/plugin.json            || { echo "::error::dist/plugin.json missing"; exit 1; }
+          test -f dist/datasource/plugin.json || { echo "::error::nested datasource missing"; exit 1; }
+          test -f dist/panel/plugin.json      || { echo "::error::nested panel missing"; exit 1; }
+          # The webpack config substitutes %VERSION% / %TODAY%. If a placeholder survives,
+          # Grafana shows a literal "%VERSION%" in the plugin catalogue.
+          if grep -q '%VERSION%\|%TODAY%' dist/plugin.json; then
+            echo "::error::plugin.json still contains a build placeholder"; exit 1
+          fi
+          node -e '
+            const v = require("./dist/plugin.json").info.version;
+            const p = require("./package.json").version;
+            if (v !== p) { console.error(`::error::dist plugin.json says ${v}, package.json says ${p}`); process.exit(1); }
+          '
+          # A key baked into a frontend bundle ships to every browser that loads the
+          # plugin. This build must not carry one.
+          if grep -rq 'bk_[A-Za-z0-9]' dist/; then
+            echo "::error::a bk_ API key is present in the build output"; exit 1
+          fi
+
+      # Signing is optional and its mode is a real decision. A PRIVATE signature is bound
+      # to specific Grafana root URLs, so it only works for instances named at sign time;
+      # that is right for a named customer and wrong for a general download. Without a
+      # token or URLs the archive ships unsigned, which needs
+      # GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS on the installing Grafana.
+      - name: Sign
+        if: ${{ env.POLICY_TOKEN != '' && env.ROOT_URLS != '' }}
+        env:
+          GRAFANA_ACCESS_POLICY_TOKEN: ${{ env.POLICY_TOKEN }}
+        run: npx --yes @grafana/sign-plugin@latest --rootUrls "${{ env.ROOT_URLS }}"
+
+      - name: Report signature state
+        id: sig
+        run: |
+          if [ -f dist/MANIFEST.txt ]; then
+            echo "state=signed (private, bound to: ${ROOT_URLS})" >> "$GITHUB_OUTPUT"
+            echo "signed — MANIFEST.txt present"
+          else
+            echo "state=unsigned" >> "$GITHUB_OUTPUT"
+            echo "UNSIGNED — the installing Grafana needs bryge-ask-app,bryge-ask-datasource,bryge-ask-panel in GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS"
+          fi
+
+      # Grafana unpacks the archive expecting a single top-level directory named for the
+      # plugin id. Zipping the contents of dist/ directly produces an archive Grafana
+      # accepts and then cannot find the plugin in.
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          ZIP="${PLUGIN_ID}-${V}.zip"
+          rm -rf package && mkdir -p "package/${PLUGIN_ID}"
+          cp -r dist/. "package/${PLUGIN_ID}/"
+          (cd package && zip -qr "../${ZIP}" "${PLUGIN_ID}")
+          sha1sum "${ZIP}" | cut -d' ' -f1 > "${ZIP}.sha1"
+          echo "zip=${ZIP}"       >> "$GITHUB_OUTPUT"
+          echo "sha1=${ZIP}.sha1" >> "$GITHUB_OUTPUT"
+          echo "name=${ZIP}"                    >> "$GITHUB_OUTPUT"
+          unzip -l "${ZIP}" | head -20
+
+      # Uploaded even on workflow_dispatch, where there is no tag and so no release: the
+      # archive is still the thing you came for.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            ${{ steps.package.outputs.zip }}
+            ${{ steps.package.outputs.sha1 }}
+          if-no-files-found: error
+
+      - name: Release
+        if: ${{ github.ref_type == 'tag' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ZIP: ${{ steps.package.outputs.zip }}
+          SHA1: ${{ steps.package.outputs.sha1 }}
+          SIG: ${{ steps.sig.outputs.state }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<EOF
+          ## Ask Bryge ${VERSION}
+
+          Signature: **${SIG}**
+
+          Download the zip and unpack it into your Grafana plugins directory
+          (\`/var/lib/grafana/plugins\` by default) so the plugin lands at
+          \`<plugins>/bryge-ask-app/\`.
+
+          This build carries **no API key**. Setup asks for one: create it at
+          <https://bryge.io/keys> and paste it into the plugin's Configuration page.
+
+          One app ships three plugins, and Grafana treats the nested data source and panel
+          as plugins in their own right. An unsigned build therefore needs all three ids
+          allowed, not just the app's:
+
+          \`\`\`
+          GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=bryge-ask-app,bryge-ask-datasource,bryge-ask-panel
+          \`\`\`
+
+          Restart Grafana after installing — \`plugin.json\` is only read at startup.
+          EOF
+          # --notes-file only. gh treats --generate-notes as the notes source when both are
+          # passed, and losing the install instructions on the one page people actually
+          # read would be a silly way to end an otherwise green build.
+          gh release create "${GITHUB_REF_NAME}" "${ZIP}" "${SHA1}" \
+            --title "Ask Bryge ${VERSION}" \
+            --notes-file notes.md

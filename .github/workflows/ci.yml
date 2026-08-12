@@ -37,6 +37,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # src/key.generated.ts is generated, gitignored, and imported by src/defaults.ts, so
+      # a clean checkout cannot typecheck until it exists. `build` generates it too, but
+      # it runs after this, and the failure reads as "Cannot find module
+      # './key.generated'".
+      - name: Generate build-time constants
+        run: npm run prepare:key
+
       - name: Check types
         run: npm run typecheck
       - name: Lint

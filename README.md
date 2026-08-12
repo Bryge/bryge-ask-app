@@ -74,9 +74,20 @@ is served from disk and only needs a page reload.
 ## Release
 
 Tag `plugin-v<version>` where `<version>` matches `package.json` exactly. The workflow
-(`.github/workflows/release-grafana-plugin.yml`) typechecks, lints, tests, builds,
-verifies the archive looks like a plugin and carries no `bk_` key, optionally signs it,
-and attaches the zip plus its SHA1 to a GitHub Release.
+(`.github/workflows/release.yml`) typechecks, lints, tests, builds, verifies the archive
+looks like a plugin and carries no `bk_` key, optionally signs it, and attaches the zip
+plus its SHA1 to a GitHub Release.
 
-Publishing to the Grafana catalog is a separate process. See
-`docs/decisions/0002-publishing-ask-bryge-to-the-grafana-catalog.md`.
+Signing is skipped unless `GRAFANA_ACCESS_POLICY_TOKEN` is set as a repository secret and
+`GRAFANA_ROOT_URLS` as a repository variable. Unsigned is the correct state until Grafana
+reviews the plugin and grants a signature level.
+
+## Contributing
+
+Bugs and feature requests: <https://github.com/Bryge/bryge-ask-app/issues>. Pull requests
+are welcome; `npm run typecheck`, `npm run lint` and `npm run test:ci` all have to pass,
+and anything user-visible needs a `CHANGELOG.md` entry.
+
+`scripts/verify/` holds Playwright scripts that walk a real install end to end against a
+live Grafana and a live Bryge. They need credentials passed as environment variables and
+are not part of CI.
