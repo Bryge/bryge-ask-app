@@ -88,10 +88,14 @@ jobs:
           version: latest
           args: test
 
+      # tests/playwright.config.js, not playwright.config.ts at the root: Playwright
+      # resolves the tsconfig nearest whatever it loads, and at the root that chain ends
+      # at '@grafana/tsconfig', which its resolver cannot follow. Looking for the old path
+      # here silently skips every e2e job instead of failing.
       - name: Check for E2E
         id: check-for-e2e
         run: |
-          if [ -f "playwright.config.ts" ]
+          if [ -f "tests/playwright.config.js" ]
           then
             echo "has-e2e=true" >> $GITHUB_OUTPUT
           fi
