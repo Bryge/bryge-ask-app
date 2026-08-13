@@ -54,7 +54,7 @@ jobs:
       # release build could never be signed — only a manual dispatch could.
       ROOT_URLS: ${{ inputs.root_urls || vars.GRAFANA_ROOT_URLS }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
