@@ -54,7 +54,7 @@ jobs:
         run: npm run build
 
       - name: Compatibility check
-        uses: grafana/plugin-actions/is-compatible@is-compatible/v1.0.2
+        uses: grafana/plugin-actions/is-compatible@is-compatible/v1.0.4
         with:
           module: ${{ matrix.module }}
           comment-pr: 'no'
