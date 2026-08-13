@@ -1,6 +1,6 @@
 {
   "name": "ask",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "scripts": {
     "prepare:key": "node scripts/write-key.mjs",
     "copy:assets": "node scripts/copy-nested-assets.mjs",

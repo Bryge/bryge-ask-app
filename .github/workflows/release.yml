@@ -27,6 +27,13 @@ on:
 
 permissions:
   contents: write        # create the release and upload assets
+  # Build provenance: a signed record that this archive came out of this workflow, on
+  # this commit. `id-token` mints the OIDC token that identifies the run to Sigstore,
+  # `attestations` lets the run write the result to GitHub's attestation store, which is
+  # where the Grafana plugin validator goes looking. Both are required; with either
+  # missing the attest step fails rather than silently skipping.
+  id-token: write
+  attestations: write
 
 concurrency:
   group: release-plugin-${{ github.ref }}
@@ -155,6 +162,19 @@ jobs:
           echo "sha1=${ZIP}.sha1" >> "$GITHUB_OUTPUT"
           echo "name=${ZIP}"                    >> "$GITHUB_OUTPUT"
           unzip -l "${ZIP}" | head -20
+
+      # Attest the archive BEFORE it is uploaded anywhere, so what gets signed is exactly
+      # the bytes that go out. The attestation is keyed on the file's sha256 digest and
+      # stored against this repository; Grafana's validator looks it up by digest and
+      # reports `no-provenance-attestation` when there is nothing there.
+      #
+      # Tag pushes only. A workflow_dispatch build is not a release and attesting it would
+      # put an entry in the store for an archive nobody can download.
+      - name: Attest build provenance
+        if: ${{ github.ref_type == 'tag' }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ steps.package.outputs.zip }}
 
       # Uploaded even on workflow_dispatch, where there is no tag and so no release: the
       # archive is still the thing you came for.

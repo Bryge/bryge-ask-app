@@ -3,6 +3,15 @@
 All notable changes to the Ask Bryge Grafana app. This file is shown on the plugin's
 details page, so it is written for someone deciding whether to update.
 
+## 1.3.3 (2026-08-13)
+
+**Changed**
+
+- Every release archive now carries a signed build provenance attestation, so anyone
+  installing it can verify the zip came out of this repository's release workflow at a
+  known commit rather than being assembled by hand. Raised by Grafana's plugin checks
+  during catalog review. No code change.
+
 ## 1.3.2 (2026-08-13)
 
 **Changed**
