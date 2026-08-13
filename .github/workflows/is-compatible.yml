@@ -1,11 +1,36 @@
 name: Latest Grafana API compatibility check
 on: [pull_request]
 
+# One app, three plugins, three entry points — and the scaffolded version of this
+# workflow could not cope with that. It ran
+#
+#   MODULETS="$(find ./src -type f -name module.ts -o -name module.tsx)"
+#   echo "modulets=${MODULETS}" >> $GITHUB_OUTPUT
+#
+# which produces three lines, and a multi-line value written as key=value is not valid
+# for $GITHUB_OUTPUT. Every run died with "Invalid format './src/panel/module.ts'"
+# before checking anything.
+#
+# Listed explicitly rather than discovered: the nested plugins are a deliberate part of
+# this plugin's shape, and each one's compatibility is worth failing over on its own.
+# Adding a fourth means adding a line here, which is the right amount of friction.
+
 jobs:
   compatibilitycheck:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: app
+            module: src/module.tsx
+          - name: panel
+            module: src/panel/module.ts
+          - name: datasource
+            module: src/datasource/module.ts
     steps:
       - uses: actions/checkout@v6
         with:
@@ -20,18 +45,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Generates src/key.generated.ts, which is gitignored and imported by
+      # src/defaults.ts. `build` does it too, but levitate reads the source tree.
+      - name: Generate build-time constants
+        run: npm run prepare:key
+
       - name: Build plugin
         run: npm run build
-
-      - name: Find module.ts or module.tsx
-        id: find-module-ts
-        run: |
-          MODULETS="$(find ./src -type f \( -name "module.ts" -o -name "module.tsx" \))"
-          echo "modulets=${MODULETS}" >> $GITHUB_OUTPUT
 
       - name: Compatibility check
         uses: grafana/plugin-actions/is-compatible@is-compatible/v1.0.2
         with:
-          module: ${{ steps.find-module-ts.outputs.modulets }}
+          module: ${{ matrix.module }}
           comment-pr: 'no'
           fail-if-incompatible: 'yes'
