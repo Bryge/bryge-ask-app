@@ -33,7 +33,20 @@
         "url": "https://github.com/Bryge/bryge-ask-app/issues"
       }
     ],
-    "screenshots": [],
+    "screenshots": [
+      {
+        "name": "Asking a panel why its data changed",
+        "path": "img/screenshot-ask.png"
+      },
+      {
+        "name": "Setup, in six steps",
+        "path": "img/screenshot-setup.png"
+      },
+      {
+        "name": "Every query behind the answer",
+        "path": "img/screenshot-query.png"
+      }
+    ],
     "version": "%VERSION%",
     "updated": "%TODAY%"
   },

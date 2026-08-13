@@ -3,6 +3,13 @@
 All notable changes to the Ask Bryge Grafana app. This file is shown on the plugin's
 details page, so it is written for someone deciding whether to update.
 
+## 1.3.2 (2026-08-13)
+
+**Changed**
+
+- Screenshots for the plugin catalog listing: a panel being asked why its data changed,
+  the six-step setup, and the queries behind an answer. No code change.
+
 ## 1.3.1 (2026-08-12)
 
 Housekeeping, aimed at a Grafana plugin catalog submission. No behaviour change.
